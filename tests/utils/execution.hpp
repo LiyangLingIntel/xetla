@@ -24,7 +24,8 @@ using namespace cl::sycl;
 using namespace gpu;
 using namespace gpu::xetla;
 
-#define CACHE_FLUSH 1
+#define CACHE_FLUSH 0
+#define FULL_FLUSH 1
 
 inline size_t time_event(sycl::event &e) {
     // get start and end times
@@ -75,7 +76,7 @@ void gemm_exec(const std::string &compile_str, size_t batch = 1) {
     using data_type_acc = typename Test::data_type_acc;
 
     int iter = 10, warmup = 10;
-#ifdef CACHE_FLUSH
+#if CACHE_FLUSH
     batch = iter + warmup;
 #else
     batch = 1;
@@ -161,15 +162,30 @@ void gemm_exec(const std::string &compile_str, size_t batch = 1) {
         // }
         cl::sycl::nd_range<3> nd_range = gemm_op_t::get_nd_range(arg);
 
+#if FULL_FLUSH
+        auto size = 256*1024*1024;
+        auto host_ptr = static_cast<int8_t *>(
+                malloc(size * sizeof(int8_t)));
+
+        for (size_t i = 0; i < size; ++i) {
+            host_ptr[i] = 0;
+        }
+        auto device_ptr = static_cast<int8_t *>(
+                aligned_alloc_device(DEVICE_MEM_ALIGNMENT,
+                        size * sizeof(int8_t), device, context));
+#endif
+
         std::vector<float> event_times(iter + warmup);
         for (uint32_t j = 0; j < iter + warmup; j++) {
+#if FULL_FLUSH
+          queue.memset((void *)(device_ptr), 0, size * sizeof(int8_t)).wait();
+#endif
             auto start = std::chrono::high_resolution_clock::now();
             auto e_esimd = queue.submit([&](handler &cgh) {
                 cgh.use_kernel_bundle(exeBundle);
                 cgh.parallel_for<Test>(
                         nd_range, [=](nd_item<3> item) KERNEL_MAIN {
-                // int batch_idx = item.get_workgroup(0);
-#ifdef CACHE_FLUSH
+#if CACHE_FLUSH
                             int batch_idx = j;
                             auto A_ptr = A + batch_idx * size_a;
                             auto B_ptr = B + batch_idx * size_b;
@@ -194,6 +210,9 @@ void gemm_exec(const std::string &compile_str, size_t batch = 1) {
             std::chrono::duration<float, std::milli> time = end - start;
             event_times[j] = time.count() / 1000;
         }
+#if CACHE_FLUSH
+        free(host_ptr);
+#endif
         auto best = 999.f;
         auto worst = 0.f;
         double average = 0.f;
