@@ -27,7 +27,7 @@ using namespace gpu::xetla;
 // flush cache 0: NO flush
 // flush cache 1: memset
 // flush cache 2: pingpong moving ptr offset
-#define FLUSH_CACHE 2
+#define FLUSH_CACHE 0
 
 template <typename T>
 static void fill_matrix(std::vector<T> &M) {
@@ -219,7 +219,7 @@ void gemm_exec(const std::string &compile_str, size_t batch = 1) {
         std::vector<float> event_times(iter + warmup);
         for (uint32_t j = 0; j < iter + warmup; j++) {
 #if FLUSH_CACHE == 1
-            queue.memset((void *)(dev_cache), 0, l3_cache_size).wait();
+            queue.memset((void *)(dev_cache), 0, l3_cache_size*sizeof(int8_t)).wait();
 #endif
 
             auto start = std::chrono::high_resolution_clock::now();

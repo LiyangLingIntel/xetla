@@ -52,12 +52,14 @@ void stream_k_gemm_run(uint32_t iter) {
             size_a * test_iter,
             [](data_type_a *data, size_t idx) {
                 data[idx] = static_cast<data_type_a>(random_float());
+                // data[idx] = static_cast<data_type_a>(0);
             },
             queue, device, context);
     auto B = alloc_device_and_init<data_type_b>(
             size_b * test_iter,
             [](data_type_b *data, size_t idx) {
                 data[idx] = static_cast<data_type_b>(random_float());
+                // data[idx] = static_cast<data_type_b>(0);
             },
             queue, device, context);
     auto C = alloc_device_and_init<data_type_c>(
@@ -137,10 +139,22 @@ void stream_k_gemm_run(uint32_t iter) {
             },
             queue, device, context);
 
+    // auto size = 256*1024*1024;
+    // auto host_ptr = static_cast<int8_t *>(
+    //           malloc(size * sizeof(int8_t)));
+    //
+    // for (size_t i = 0; i < size; ++i) {
+    //     host_ptr[i] = 0;
+    // }
+    // auto device_ptr = static_cast<int8_t *>(
+    //         aligned_alloc_device(DEVICE_MEM_ALIGNMENT,
+    //                 size * sizeof(int8_t), device, context));
+
     long ops = 2 * static_cast<long>(matrix_m) * matrix_n * matrix_k;
     profiling_helper prof("stream_k_universalgemm", ops, "gflops");
     std::vector<float> event_times(iter + warmup);
     for (uint32_t i = 0; i < iter + warmup; i++) {
+        // queue.memset((void *)(device_ptr), 0, size * sizeof(int8_t)).wait();
         // set up gemm arguments
         typename gemm_op_t::arguments_t gemm_arg(matrix_m, matrix_k, matrix_n,
                 A + i * size_a, matrix_k, B + i * size_b, matrix_n,
@@ -177,6 +191,8 @@ void stream_k_gemm_run(uint32_t iter) {
             prof.add_gpu_event(gpu_event);
         }
     }
+    // free(host_ptr);
+
     double average_event_time = 0.f;
     auto best = 999.f;
     for (uint32_t i = warmup; i < iter + warmup; i++) {
@@ -197,6 +213,12 @@ void stream_k_gemm_run(uint32_t iter) {
                     + matrix_k * matrix_n * sizeof(data_type_b)
                     + matrix_m * matrix_n * sizeof(data_type_c))
                     / best / 1e9);
+    printf("Avg is %f Tflops, %f HBM (GBs)\n",
+            2.0 * matrix_m * matrix_n * matrix_k / 1e12 / average_event_time,
+            (matrix_m * matrix_k * sizeof(data_type_a)
+                    + matrix_k * matrix_n * sizeof(data_type_b)
+                    + matrix_m * matrix_n * sizeof(data_type_c))
+                    / average_event_time / 1e9);
 
     ASSERT_EQ(0,
             gemm_result_validate(A, B, C, 1, matrix_m, matrix_k, matrix_n,
@@ -412,12 +434,23 @@ void stream_k_gemm_relu_biasadd_run(uint32_t iter) {
                   << std::endl;
         FAIL();
     }
+    auto size = 256*1024*1024;
+    auto host_ptr = static_cast<int8_t *>(
+              malloc(size * sizeof(int8_t)));
+
+    for (size_t i = 0; i < size; ++i) {
+        host_ptr[i] = 0;
+    }
+    auto device_ptr = static_cast<int8_t *>(
+            aligned_alloc_device(DEVICE_MEM_ALIGNMENT,
+                    size * sizeof(int8_t), device, context));
 
     uint32_t warmup = 5;
     long ops = 2 * static_cast<long>(matrix_m) * matrix_n * matrix_k;
     profiling_helper prof(
             "stream_k_universal_gemm_relu_biasadd", ops, "gflops");
     for (uint32_t i = 0; i < iter + warmup; i++) {
+        queue.memset((void *)(device_ptr), 0, size * sizeof(int8_t)).wait();
         if (i >= warmup) { prof.cpu_start(); }
         auto gpu_event = queue.submit([&](handler &cgh) {
             // GPU kernel
@@ -435,6 +468,7 @@ void stream_k_gemm_relu_biasadd_run(uint32_t iter) {
             prof.add_gpu_event(gpu_event);
         }
     }
+    free(host_ptr);
 
     ASSERT_EQ(0,
             gemm_relu_bias_result_validate(A, B, C, Bias, matrix_m, matrix_k,
@@ -458,6 +492,6 @@ int main() {
     //Implementation loosely based on this paper "Stream-K: Work-centric Parallel Decomposition for Dense Matrix-Matrix Multiplication on the GPU" (https://arxiv.org/abs/2301.03598)
     //First example demonstrates stream_k GEMM split , Second example demonstrates stream_k GEMM + post-op fusion
     stream_k_gemm_run(10);
-    stream_k_gemm_relu_biasadd_run(10);
+    // stream_k_gemm_relu_biasadd_run(10);
     return (0);
 }
